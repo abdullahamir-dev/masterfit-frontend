@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Resource Booking Grid — MasterFit</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="left">
+      <h1>Booking Grid</h1>
+      <div class="sub">Select date and book slots across resources</div>
+    </div>
+
+    <div class="right">
+      <label class="small">Mode
+        <select id="modeSelect">
+          <option value="live">Live API</option>
+          <option value="mock">Mock</option>
+        </select>
+      </label>
+
+      <label class="small">Customer ID
+        <input id="customerInput" type="number" min="1" />
+      </label>
+
+      <label class="small">Date
+        <input id="datePicker" type="date" />
+      </label>
+
+      <button id="loadBtn" class="btn primary">Load Grid</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <div id="status" class="status">Ready</div>
+
+    <!-- Grid container -->
+    <div id="gridWrap" class="grid-wrap" hidden>
+      <div id="gridHeader" class="grid-header"></div>
+      <div id="gridBody" class="grid-body"></div>
+    </div>
+
+    <div id="noData" class="empty" hidden>No resources or slots available for the selected date.</div>
+  </main>
+
+  <!-- Modal (single modal used for register/update with mode switch) -->
+  <div id="modal" class="modal" aria-hidden="true">
+    <div class="modal-content">
+      <button id="modalClose" class="modal-close">&times;</button>
+      <h3 id="modalTitle">Confirm</h3>
+
+      <div id="modalBody" class="modal-body">
+        <!-- filled dynamically -->
+      </div>
+
+      <div class="modal-actions">
+        <button id="modalCancel" class="btn">Cancel</button>
+        <button id="modalConfirm" class="btn primary">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <footer class="footer">
+    <small>Designed to match the client's recommended grid style. Register & update are mocked until server endpoints are provided.</small>
+  </footer>
+
+  <script src="main.js" defer></script>
+</body>
+</html>
