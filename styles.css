@@ -54,11 +54,45 @@ body{margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Arial;background:var(-
 /* modal */
 .modal{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(6,10,20,0.45);visibility:hidden;opacity:0;transition:opacity .18s;z-index:50}
 .modal[aria-hidden="false"]{visibility:visible;opacity:1}
-.modal-content{width:470px;max-width:96%;background:var(--card);padding:16px;border-radius:10px;box-shadow:var(--shadow);position:relative}
+.modal-content{width:520px;max-width:96%;background:var(--card);padding:18px;border-radius:10px;box-shadow:var(--shadow);position:relative}
 .modal-close{position:absolute;right:12px;top:8px;border:0;background:transparent;font-size:22px;cursor:pointer}
 .modal-body{margin:12px 0;font-size:14px;color:#222}
 .modal-actions{display:flex;gap:10px;justify-content:flex-end}
 .footer{max-width:1200px;margin:14px auto;padding:0 12px;color:var(--muted);text-align:center;font-size:13px}
+
+/* view modal table (modern, compact) */
+.view-table-wrap {
+  width:100%;
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  padding: 8px;
+  box-shadow: 0 6px 18px rgba(15,23,42,0.04);
+}
+.view-table {
+  width:100%;
+  border-collapse: collapse;
+  font-size:14px;
+}
+.view-table th {
+  text-align:left;
+  padding:8px 10px;
+  color:var(--muted);
+  width:35%;
+  font-weight:600;
+  vertical-align:top;
+}
+.view-table td {
+  padding:8px 10px;
+  color:#111;
+}
+
+/* responsive tweaks for view modal */
+@media (max-width:560px) {
+  .modal-content { width: 92%; padding: 12px; }
+  .view-table th { width: 40%; font-size:13px; }
+  .view-table td { font-size:13px; }
+}
 
 /* responsive */
 @media (max-width:900px){

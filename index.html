@@ -45,7 +45,7 @@
     <div id="noData" class="empty" hidden>No resources or slots available for the selected date.</div>
   </main>
 
-  <!-- Modal (single modal used for register/update with mode switch) -->
+  <!-- Register / Update Modal (single modal reused for register & update) -->
   <div id="modal" class="modal" aria-hidden="true">
     <div class="modal-content">
       <button id="modalClose" class="modal-close">&times;</button>
@@ -55,9 +55,27 @@
         <!-- filled dynamically -->
       </div>
 
-      <div class="modal-actions">
+      <div class="modal-actions" id="modalActions">
+        <!-- dynamic buttons inserted here -->
         <button id="modalCancel" class="btn">Cancel</button>
         <button id="modalConfirm" class="btn primary">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- View Details Modal (separate, read-only) -->
+  <div id="viewModal" class="modal" aria-hidden="true">
+    <div class="modal-content">
+      <button id="viewModalClose" class="modal-close">&times;</button>
+      <h3 id="viewModalTitle">Appointment Details</h3>
+
+      <div id="viewModalBody" class="modal-body">
+        <!-- table will be injected here -->
+        <div class="view-table-wrap" id="viewTableWrap"></div>
+      </div>
+
+      <div class="modal-actions">
+        <button id="viewCloseBtn" class="btn primary">Close</button>
       </div>
     </div>
   </div>

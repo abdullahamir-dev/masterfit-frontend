@@ -17,8 +17,7 @@ const CONFIG = {
   SLOT_MIN_TIME: 8,  // grid start hour (8 => 8:00)
   SLOT_MAX_TIME: 17, // grid end hour (17 => 17:00)
   SLOT_DURATION_MIN: 30, // minutes per row
-  // NEW: whether to respect server-provided Register_Id on initial load.
-  // Set to false to avoid slots being pre-registered on page load (recommended).
+  // whether to respect server-provided Register_Id on initial load.
   RESPECT_SERVER_REGISTERED: false
 };
 
@@ -84,15 +83,12 @@ const MOCK = {
   ],
   // map key: `${customerId}|${date}|${resourceId}`
   slots: {
-    // sample: resource 1 has some slots
     '1|2025-11-03|1': [
       { Appoitment_Id: 7909, Date:'2025-11-03', TimeFrom:'2025-11-03T09:00:00', TimeTo:'2025-11-03T09:30:00', Status:1, Description_En:'Available' },
       { Appoitment_Id: 7910, Date:'2025-11-03', TimeFrom:'2025-11-03T10:00:00', TimeTo:'2025-11-03T10:30:00', Status:2, Description_En:'Available' }
     ],
     '1|2025-11-03|2': [
       { Appoitment_Id: 7920, Date:'2025-11-03', TimeFrom:'2025-11-03T09:00:00', TimeTo:'2025-11-03T09:30:00', Status:1, Description_En:'Available' },
-      // NOTE: mock contains a Register_Id here — previously this meant a pre-registered slot on load.
-      // With RESPECT_SERVER_REGISTERED=false (default) the UI will NOT mark this as registered on initial load.
       { Appoitment_Id: 7921, Date:'2025-11-03', TimeFrom:'2025-11-03T11:00:00', TimeTo:'2025-11-03T11:30:00', Status:1, Description_En:'Available', Register_Id: CONFIG.CUSTOMER_ID }
     ]
   }
@@ -128,7 +124,6 @@ async function fetchSlotsForResource(customerId, dateStr, resourceId) {
   const path = `/MasterFit_APP_GetAppointment/Calender?Customer_Id=${customerId}&Date=${dateStr}&Resource_Id=${resourceId}`;
   try {
     const data = await apiGet(path);
-    // if server returns {"result":"failed"} treat as empty/error
     if (data && data.result === 'failed') throw new Error(data.msg_en || 'Invalid Data');
     return data;
   } catch (err) {
@@ -138,6 +133,95 @@ async function fetchSlotsForResource(customerId, dateStr, resourceId) {
     const key = `${customerId}|${dateStr}|${resourceId}`;
     return MOCK.slots[key] || [];
   }
+}
+
+/* ====================
+   View / Details support
+   ==================== */
+
+/**
+ * Fetch appointment details for a specific appointment or resource/date.
+ * If `appId` provided, try to find exact appointment in server response (or slotsMap).
+ * If slotObj provided directly, uses that immediately.
+ * Returns a slot-like object or null.
+ */
+async function fetchAppointmentDetails({ customerId, dateStr, resourceId, appId = null, slotObj = null }) {
+  // if slot object provided, use it directly (fast path)
+  if (slotObj) {
+    return slotObj;
+  }
+
+  // try to look in in-memory slotsMap first
+  if (slotsMap[String(resourceId)]) {
+    const found = (slotsMap[String(resourceId)] || []).find(s => {
+      if (appId && s.Appoitment_Id) return String(s.Appoitment_Id) === String(appId);
+      return false;
+    });
+    if (found) return found;
+  }
+
+  // otherwise fetch from API (same endpoint)
+  try {
+    const arr = await fetchSlotsForResource(customerId, dateStr, resourceId);
+    if (!arr || arr.length === 0) return null;
+    if (appId) {
+      const f = arr.find(s => String(s.Appoitment_Id) === String(appId));
+      if (f) return f;
+    }
+    // fallback: return first slot (if no appId)
+    return arr[0] || null;
+  } catch (err) {
+    console.warn('fetchAppointmentDetails error', err);
+    return null;
+  }
+}
+
+/* Render view modal table from a slot-like object */
+function openViewModal(slotObj) {
+  const viewModal = $('#viewModal');
+  const wrap = $('#viewTableWrap');
+  if (!slotObj) {
+    wrap.innerHTML = `<div style="padding:12px;color:var(--muted)">No details available for this selection.</div>`;
+  } else {
+    // Map API fields to display fields
+    const rows = [
+      ['Appointment No', slotObj.Appoitment_Id ?? '—'],
+      ['Resource ID', slotObj.Resource_Id ?? slotObj.ResourceId ?? '—'],
+      ['Appointment Date', slotObj.Date ?? (slotObj.TimeFrom ? slotObj.TimeFrom.split('T')[0] : '—')],
+      ['Time From', slotObj.TimeFrom ? fmtTime(slotObj.TimeFrom) : '—'],
+      ['Time To', slotObj.TimeTo ? fmtTime(slotObj.TimeTo) : '—'],
+      ['Status', slotObj.Description_En ?? (slotObj.Status === 1 ? 'Available' : slotObj.Status) ?? '—'],
+      ['Registered User ID', slotObj.Register_Id ?? '—'],
+      ['Register Subscribe No', slotObj.Register_Subscribe_Number ?? '—'],
+      ['Full Name', slotObj.Full_Name ?? '—'],
+      ['Phone', slotObj.Phone ?? '—'],
+      ['Birth Date', slotObj.Birth_Date ?? '—'],
+      ['Color', slotObj.Color ?? '—'],
+      ['Notes', slotObj.Description_Ar ?? '—']
+    ];
+
+    // build table HTML
+    let html = `<div class="view-table-wrap"><table class="view-table">`;
+    rows.forEach(([k,v]) => {
+      html += `<tr><th>${k}</th><td>${v}</td></tr>`;
+    });
+    html += `</table></div>`;
+    wrap.innerHTML = html;
+  }
+
+  // show modal
+  viewModal.setAttribute('aria-hidden','false');
+  viewModal.style.visibility = 'visible';
+  viewModal.style.opacity = '1';
+}
+
+/* Close view modal */
+function closeViewModal() {
+  const viewModal = $('#viewModal');
+  $('#viewTableWrap').innerHTML = '';
+  viewModal.setAttribute('aria-hidden','true');
+  viewModal.style.visibility = 'hidden';
+  viewModal.style.opacity = '0';
 }
 
 /* ====================
@@ -209,10 +293,6 @@ function renderGrid(dateStr) {
 
       if (matched) {
         const slotEl = document.createElement('div');
-        // Determine status: registered (by current user) or available or booked
-        // IMPORTANT CHANGE:
-        // - Only treat a slot as "registered" if registeredSlot matches it (i.e. user action in this session),
-        //   OR if RESPECT_SERVER_REGISTERED is true and the server-provided Register_Id matches current customer.
         const custId = Number($('#customerInput').value || CONFIG.CUSTOMER_ID);
         const serverRegistered = matched.Register_Id && Number(matched.Register_Id) === custId;
         const isRegistered = (registeredSlot && registeredSlot.Appoitment_Id && registeredSlot.Appoitment_Id === matched.Appoitment_Id)
@@ -233,12 +313,8 @@ function renderGrid(dateStr) {
         slotEl.dataset.timeTo = matched.TimeTo;
 
         slotEl.innerHTML = `<div>${fmtTime(matched.TimeFrom)}</div><small>${matched.Description_En || ''}</small>`;
-        // click behavior
         slotEl.addEventListener('click', () => onSlotClick(matched, r));
         col.appendChild(slotEl);
-      } else {
-        // empty cell — optionally show nothing or a small placeholder
-        // leave empty for clean look
       }
 
       rowEl.appendChild(col);
@@ -255,24 +331,20 @@ function renderGrid(dateStr) {
    ==================== */
 function onSlotClick(slotObj, resource) {
   const custId = Number($('#customerInput').value || CONFIG.CUSTOMER_ID);
-  // IMPORTANT: now isRegistered only considers registeredSlot (user action) OR server if allowed by flag
   const serverRegistered = slotObj.Register_Id && Number(slotObj.Register_Id) === custId;
   const isRegistered = (registeredSlot && registeredSlot.Appoitment_Id === slotObj.Appoitment_Id)
                        || (CONFIG.RESPECT_SERVER_REGISTERED && serverRegistered);
 
   if (isRegistered) {
-    // already registered by this user
     alert('This slot is already registered for you.');
     return;
   }
 
-  // If user has no current registration -> Register flow
   if (!registeredSlot) {
     openModal('register', { slot: slotObj, resource, customerId: custId });
     return;
   }
 
-  // User has a registered slot already -> Update flow (move)
   openModal('update', { old: registeredSlot, slot: slotObj, resource, customerId: custId });
 }
 
@@ -282,6 +354,7 @@ function onSlotClick(slotObj, resource) {
 const modalEl = $('#modal');
 const modalTitle = $('#modalTitle');
 const modalBody = $('#modalBody');
+const modalActions = $('#modalActions');
 const modalConfirm = $('#modalConfirm');
 const modalCancel = $('#modalCancel');
 const modalClose = $('#modalClose');
@@ -294,6 +367,11 @@ function openModal(mode, ctx) {
   modalEl.style.visibility = 'visible';
   modalEl.style.opacity = '1';
 
+  // common cancel button exists
+  // we will rebuild modal-actions to include view buttons conditionally
+  modalBody.innerHTML = '';
+  modalActions.innerHTML = '';
+
   if (mode === 'register') {
     modalTitle.textContent = 'Register Appointment (mock)';
     modalBody.innerHTML = `
@@ -302,9 +380,34 @@ function openModal(mode, ctx) {
       <p>Customer ID: <strong>${ctx.customerId}</strong></p>
       <p>Action: This will <strong>mark this slot as registered</strong> (mock). Placeholder included for real API POST.</p>
     `;
-    modalConfirm.textContent = 'Register';
+    // Add View Details button (register modal only)
+    const viewBtn = document.createElement('button');
+    viewBtn.className = 'btn';
+    viewBtn.textContent = 'View Details';
+    viewBtn.addEventListener('click', async () => {
+      // open view modal using slot object directly (fast)
+      const slot = await fetchAppointmentDetails({ customerId: ctx.customerId, dateStr: $('#datePicker').value, resourceId: ctx.resource.ID, slotObj: ctx.slot });
+      openViewModal(slot);
+    });
+    modalActions.appendChild(viewBtn);
+
+    // Confirm button
+    const confirmBtn = document.createElement('button');
+    confirmBtn.className = 'btn primary';
+    confirmBtn.id = 'modalConfirm';
+    confirmBtn.textContent = 'Register';
+    confirmBtn.addEventListener('click', () => handleModalConfirm('register', ctx));
+    modalActions.appendChild(confirmBtn);
+
+    // Cancel
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'btn';
+    cancelBtn.id = 'modalCancel';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', closeModal);
+    modalActions.appendChild(cancelBtn);
+
   } else if (mode === 'update') {
-    // ctx.old must include { Appoitment_Id, resourceId } or a minimal shape
     modalTitle.textContent = 'Update Appointment (mock)';
     const oldTime = (ctx.old && ctx.old.TimeFrom) ? fmtTime(ctx.old.TimeFrom) + ' — ' + fmtTime(ctx.old.TimeTo) : '(current registration)';
     modalBody.innerHTML = `
@@ -314,7 +417,49 @@ function openModal(mode, ctx) {
       <p>Customer ID: <strong>${ctx.customerId}</strong></p>
       <p>Action: This will <strong>move your registration</strong> to the new slot (mock). Placeholder included for real API PUT.</p>
     `;
-    modalConfirm.textContent = 'Confirm update';
+
+    // View Current button
+    const viewCurrent = document.createElement('button');
+    viewCurrent.className = 'btn';
+    viewCurrent.textContent = 'View Current';
+    viewCurrent.addEventListener('click', async () => {
+      // use registeredSlot or ctx.old to fetch details
+      const current = ctx.old && ctx.old.Appoitment_Id ? ctx.old : registeredSlot;
+      if (!current) {
+        alert('No current registration available.');
+        return;
+      }
+      // try find details by Appoitment_Id
+      const slot = await fetchAppointmentDetails({ customerId: ctx.customerId, dateStr: $('#datePicker').value, resourceId: current.Resource_Id || ctx.resource.ID, appId: current.Appoitment_Id });
+      openViewModal(slot);
+    });
+    modalActions.appendChild(viewCurrent);
+
+    // View Updating button (show new slot details)
+    const viewUpdating = document.createElement('button');
+    viewUpdating.className = 'btn';
+    viewUpdating.textContent = 'View Updating';
+    viewUpdating.addEventListener('click', async () => {
+      const slot = await fetchAppointmentDetails({ customerId: ctx.customerId, dateStr: $('#datePicker').value, resourceId: ctx.resource.ID, slotObj: ctx.slot });
+      openViewModal(slot);
+    });
+    modalActions.appendChild(viewUpdating);
+
+    // Confirm update button
+    const confirmBtn = document.createElement('button');
+    confirmBtn.className = 'btn primary';
+    confirmBtn.id = 'modalConfirm';
+    confirmBtn.textContent = 'Confirm update';
+    confirmBtn.addEventListener('click', () => handleModalConfirm('update', ctx));
+    modalActions.appendChild(confirmBtn);
+
+    // Cancel
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'btn';
+    cancelBtn.id = 'modalCancel';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', closeModal);
+    modalActions.appendChild(cancelBtn);
   }
 }
 
@@ -325,58 +470,34 @@ function closeModal() {
   modalEl.style.opacity = '0';
 }
 
-/* Confirm handler (register or update in mock) */
-modalConfirm.addEventListener('click', async () => {
-  if (!modalContext) return;
-  const { mode, ctx } = modalContext;
+/* Centralized confirm handler used by register/update buttons */
+async function handleModalConfirm(mode, ctx) {
   try {
     if (mode === 'register') {
-      // MOCK register:
-      // Placeholder: here you would POST to AddAppointment endpoint.
-      // Example:
-      // POST /MasterFit_APP_AddAppointment
-      // body: { Customer_Id, Resource_Id, TimeFrom, TimeTo, Description_En }
-      //
-      // After successful post, set registeredSlot and update UI.
-
-      // simulate server response
-      const newId = Date.now(); // mock ID
+      // MOCK register
+      const newId = Date.now();
       registeredSlot = {
         Appoitment_Id: newId,
         Resource_Id: ctx.resource.ID,
         TimeFrom: ctx.slot.TimeFrom,
         TimeTo: ctx.slot.TimeTo
       };
-      // update mocked slot object so render reflects registered state
       ctx.slot.Register_Id = ctx.customerId;
       ctx.slot.Appoitment_Id = newId;
       setStatus('Registered (mock): slot marked as dark green');
       closeModal();
-      // re-render grid to reflect change
       renderGrid($('#datePicker').value || isoDateString(new Date()));
       alert('Appointment registered (mock).');
     } else if (mode === 'update') {
-      // MOCK update (move):
-      // Placeholder: here you would PUT to UpdateAppointment endpoint.
-      // Example:
-      // PUT /MasterFit_APP_UpdateAppointment
-      // body: { Appoitment_Id, Customer_Id, NewTimeFrom, NewTimeTo, Resource_Id }
-      //
-      // After success: mark new slot registered and previous slot un-registered.
-
-      // find old and new slot objects in slotsMap and update flags
-      const old = ctx.old;   // expected shape { Appoitment_Id, Resource_Id, TimeFrom, TimeTo }
+      const old = ctx.old;
       const newSlot = ctx.slot;
-      // un-register previous in slotsMap if present
       if (old && old.Appoitment_Id) {
-        // find resource array and unset register marker where Appoitment_Id matches
         const prevResSlots = slotsMap[String(old.Resource_Id)] || [];
         const prevObj = prevResSlots.find(s => s.Appoitment_Id === old.Appoitment_Id);
         if (prevObj) {
           delete prevObj.Register_Id;
         }
       }
-      // mark new slot as registered
       newSlot.Register_Id = ctx.customerId;
       registeredSlot = {
         Appoitment_Id: newSlot.Appoitment_Id,
@@ -394,23 +515,30 @@ modalConfirm.addEventListener('click', async () => {
     setStatus('Failed to register/update (mock)', true);
     alert('Failed to register/update (see console).');
   }
+}
+
+/* Cancel & Close handlers for modal close buttons */
+document.addEventListener('click', (e) => {
+  if (e.target && e.target.id === 'modalClose') closeModal();
 });
 
-/* Cancel & Close */
-modalCancel.addEventListener('click', closeModal);
-modalClose.addEventListener('click', closeModal);
+/* ====================
+   View modal close handlers
+   ==================== */
+document.addEventListener('click', (e) => {
+  if (e.target && e.target.id === 'viewModalClose') closeViewModal();
+  if (e.target && e.target.id === 'viewCloseBtn') closeViewModal();
+});
 
 /* ====================
    Main load flow
    ==================== */
 document.addEventListener('DOMContentLoaded', () => {
-  // init inputs
   $('#modeSelect').value = MODE;
   $('#customerInput').value = CONFIG.CUSTOMER_ID;
   const today = isoDateString(new Date());
   $('#datePicker').value = today;
 
-  // event listeners
   $('#loadBtn').addEventListener('click', async () => {
     const dateStr = $('#datePicker').value || isoDateString(new Date());
     const custId = Number($('#customerInput').value || CONFIG.CUSTOMER_ID);
@@ -432,7 +560,6 @@ async function loadAndRender(dateStr, customerId) {
   try {
     setStatus('Loading resources...');
     resources = await fetchResources(customerId);
-    // normalize resource IDs to string
     resources = (resources || []).map(r => ({ ...r, ID: String(r.ID) }));
     if (!resources || resources.length === 0) {
       setStatus('No resources returned', true);
@@ -441,8 +568,7 @@ async function loadAndRender(dateStr, customerId) {
       return;
     }
 
-    // IMPORTANT CHANGE: Clear any session-registered slot on initial load.
-    // This prevents showing a pre-registered slot that blocks the register modal.
+    // Clear any session-registered slot on initial load
     registeredSlot = null;
 
     // load slots for each resource concurrently
@@ -450,15 +576,7 @@ async function loadAndRender(dateStr, customerId) {
     slotsMap = {};
     const promises = resources.map(async (r) => {
       const arr = await fetchSlotsForResource(customerId, dateStr, r.ID);
-      // normalize array
       slotsMap[String(r.ID)] = (arr || []).map(s => ({ ...s }));
-      // NOTE:
-      // Previously we auto-set registeredSlot from server-provided Register_Id here.
-      // That caused a pre-registered slot on load. To avoid that UX issue we now
-      // only set registeredSlot when the user registers during this session.
-      //
-      // If you want to respect server-registered slots on load, set CONFIG.RESPECT_SERVER_REGISTERED = true,
-      // and uncomment the block below (or keep the flag true to enable it).
       if (CONFIG.RESPECT_SERVER_REGISTERED) {
         (slotsMap[String(r.ID)] || []).forEach(s => {
           if (s.Register_Id && Number(s.Register_Id) === Number(customerId)) {
@@ -469,8 +587,6 @@ async function loadAndRender(dateStr, customerId) {
     });
 
     await Promise.all(promises);
-
-    // render UI
     renderGrid(dateStr);
   } catch (err) {
     console.error(err);
@@ -482,8 +598,7 @@ async function loadAndRender(dateStr, customerId) {
 
 /* ====================
    Notes for Integration:
-   - Add appointment (POST): implement in modalConfirm 'register' block (replace mock).
-   - Update appointment (PUT): implement in modalConfirm 'update' block (replace mock).
-   - When server endpoints available, call fetch() to POST/PUT and then refresh grid or apply returned state.
-   - Example placeholders are commented above where register/update occur.
+   - Add appointment (POST): implement in handleModalConfirm register block.
+   - Update appointment (PUT): implement in handleModalConfirm update block.
+   - fetchAppointmentDetails uses the same GetAppointment endpoint to populate view table.
    ==================== */
