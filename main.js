@@ -3,9 +3,8 @@
    - Uses two GET APIs:
      GET /MasterFit_Calender_Get_Appt_Resource_Nutration?Customer_Id={id}
      GET /MasterFit_APP_GetAppointment/Calender?Customer_Id={id}&Date={yyyy-mm-dd}&Resource_Id={id}
-   - Renders a grid: columns = resources, rows = time slots (slot duration configurable).
-   - Light green = available slot, Dark green = registered (for current user).
-   - Register & Update actions are MOCKED (placeholders included for real API calls).
+   - New: Update endpoint POST /Masterfit_Calender_Nutation_Update
+   - View modal supports read-only view and "updating" edit mode where Status/Notes can be changed
 */
 
 /* =========================
@@ -18,7 +17,9 @@ const CONFIG = {
   SLOT_MAX_TIME: 17, // grid end hour (17 => 17:00)
   SLOT_DURATION_MIN: 30, // minutes per row
   // whether to respect server-provided Register_Id on initial load.
-  RESPECT_SERVER_REGISTERED: false
+  RESPECT_SERVER_REGISTERED: false,
+  // Update endpoint (server provided)
+  UPDATE_ENDPOINT: '/Masterfit_Calender_Nutation_Update'
 };
 
 /* =========================
@@ -27,7 +28,7 @@ const CONFIG = {
 let MODE = localStorage.getItem('mode') || 'live'; // 'live' or 'mock'
 let resources = [];    // array of resource objects from API
 let slotsMap = {};     // map: resourceId -> array of slot objects for selected date
-let registeredSlot = null; // { Appoitment_Id, Resource_Id, TimeFrom, TimeTo } - current user's registered slot (mocked)
+let registeredSlot = null; // { Appoitment_Id, Resource_Id, TimeFrom, TimeTo } - current user's registered slot (session)
 const $ = sel => document.querySelector(sel);
 
 /* ===============
@@ -61,7 +62,6 @@ function generateRowTimes(dateStr) {
   const rows = [];
   const [y,m,d] = dateStr.split('-').map(s => parseInt(s,10));
   for (let h = CONFIG.SLOT_MIN_TIME; h <= CONFIG.SLOT_MAX_TIME; h++) {
-    // step by slot duration
     const step = CONFIG.SLOT_DURATION_MIN;
     for (let mins = 0; mins < 60; mins += step) {
       const dt = new Date(y, m-1, d, h, mins, 0);
@@ -99,9 +99,30 @@ const MOCK = {
    ==================== */
 async function apiGet(path) {
   const url = `${CONFIG.API_BASE}${path}`;
+  MODE = 'live';
   if (MODE === 'mock') throw new Error('mock-mode');
   const r = await fetch(url);
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+/* POST/PUT wrapper for update */
+async function apiPostJson(path, bodyObj) {
+  const url = `${CONFIG.API_BASE}${path}`;
+  MODE = 'live';
+  if (MODE === 'mock') throw new Error('mock-mode');
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+      // add auth headers here if required by backend
+    },
+    body: JSON.stringify(bodyObj)
+  });
+  if (!r.ok) {
+    const txt = await r.text().catch(()=>null);
+    throw new Error(`HTTP ${r.status} ${txt||''}`);
+  }
   return r.json();
 }
 
@@ -136,6 +157,37 @@ async function fetchSlotsForResource(customerId, dateStr, resourceId) {
 }
 
 /* ====================
+   Update API integration
+   ==================== */
+
+/**
+ * Call server update endpoint to update appointment status and notes.
+ * Body format (server example):
+ * { "Appointment_Id":"1", "Notes":"Status", "Status":"1" }
+ *
+ * Returns server JSON or throws.
+ */
+async function updateAppointmentAPI(appointmentId, statusValue, notesValue) {
+  if (!appointmentId) throw new Error('Missing Appointment_Id');
+  const body = {
+    Appointment_Id: String(appointmentId),
+    Notes: notesValue ?? '',
+    Status: String(statusValue ?? '')
+  };
+
+  // If in mock mode, simulate success response
+  //if (MODE === 'mock') {
+    // small delay to simulate network
+    //await new Promise(r => setTimeout(r, 350));
+    //return { result: 'success', msg_en: 'Success', msg_ar: 'sucess' };
+  //}
+
+  // real network call
+  const resp = await apiPostJson(CONFIG.UPDATE_ENDPOINT, body);
+  return resp;
+}
+
+/* ====================
    View / Details support
    ==================== */
 
@@ -146,12 +198,8 @@ async function fetchSlotsForResource(customerId, dateStr, resourceId) {
  * Returns a slot-like object or null.
  */
 async function fetchAppointmentDetails({ customerId, dateStr, resourceId, appId = null, slotObj = null }) {
-  // if slot object provided, use it directly (fast path)
-  if (slotObj) {
-    return slotObj;
-  }
+  if (slotObj) return slotObj;
 
-  // try to look in in-memory slotsMap first
   if (slotsMap[String(resourceId)]) {
     const found = (slotsMap[String(resourceId)] || []).find(s => {
       if (appId && s.Appoitment_Id) return String(s.Appoitment_Id) === String(appId);
@@ -160,7 +208,6 @@ async function fetchAppointmentDetails({ customerId, dateStr, resourceId, appId 
     if (found) return found;
   }
 
-  // otherwise fetch from API (same endpoint)
   try {
     const arr = await fetchSlotsForResource(customerId, dateStr, resourceId);
     if (!arr || arr.length === 0) return null;
@@ -168,7 +215,6 @@ async function fetchAppointmentDetails({ customerId, dateStr, resourceId, appId 
       const f = arr.find(s => String(s.Appoitment_Id) === String(appId));
       if (f) return f;
     }
-    // fallback: return first slot (if no appId)
     return arr[0] || null;
   } catch (err) {
     console.warn('fetchAppointmentDetails error', err);
@@ -176,52 +222,165 @@ async function fetchAppointmentDetails({ customerId, dateStr, resourceId, appId 
   }
 }
 
-/* Render view modal table from a slot-like object */
-function openViewModal(slotObj) {
+/**
+ * Open view modal.
+ * - slotObj: slot object to display
+ * - options: { editable: boolean, onUpdated: fn } editable = true => show status + notes + Update button
+ */
+function openViewModal(slotObj, options = {}) {
   const viewModal = $('#viewModal');
   const wrap = $('#viewTableWrap');
+  const actionsWrap = $('#viewModalActions');
+  const editable = !!options.editable;
+
+  // Build either read-only table OR editable form
   if (!slotObj) {
     wrap.innerHTML = `<div style="padding:12px;color:var(--muted)">No details available for this selection.</div>`;
   } else {
-    // Map API fields to display fields
-    const rows = [
-      ['Appointment No', slotObj.Appoitment_Id ?? '—'],
-      ['Resource ID', slotObj.Resource_Id ?? slotObj.ResourceId ?? '—'],
-      ['Appointment Date', slotObj.Date ?? (slotObj.TimeFrom ? slotObj.TimeFrom.split('T')[0] : '—')],
-      ['Time From', slotObj.TimeFrom ? fmtTime(slotObj.TimeFrom) : '—'],
-      ['Time To', slotObj.TimeTo ? fmtTime(slotObj.TimeTo) : '—'],
-      ['Status', slotObj.Description_En ?? (slotObj.Status === 1 ? 'Available' : slotObj.Status) ?? '—'],
-      ['Registered User ID', slotObj.Register_Id ?? '—'],
-      ['Register Subscribe No', slotObj.Register_Subscribe_Number ?? '—'],
-      ['Full Name', slotObj.Full_Name ?? '—'],
-      ['Phone', slotObj.Phone ?? '—'],
-      ['Birth Date', slotObj.Birth_Date ?? '—'],
-      ['Color', slotObj.Color ?? '—'],
-      ['Notes', slotObj.Description_Ar ?? '—']
-    ];
+    if (!editable) {
+      const rows = [
+        ['Appointment No', slotObj.Appoitment_Id ?? '—'],
+        ['Resource ID', slotObj.Resource_Id ?? slotObj.ResourceId ?? '—'],
+        ['Appointment Date', slotObj.Date ?? (slotObj.TimeFrom ? slotObj.TimeFrom.split('T')[0] : '—')],
+        ['Time From', slotObj.TimeFrom ? fmtTime(slotObj.TimeFrom) : '—'],
+        ['Time To', slotObj.TimeTo ? fmtTime(slotObj.TimeTo) : '—'],
+        ['Status', slotObj.Description_En ?? (slotObj.Status === 1 ? 'Available' : slotObj.Status) ?? '—'],
+        ['Registered User ID', slotObj.Register_Id ?? '—'],
+        ['Register Subscribe No', slotObj.Register_Subscribe_Number ?? '—'],
+        ['Full Name', slotObj.Full_Name ?? '—'],
+        ['Phone', slotObj.Phone ?? '—'],
+        ['Birth Date', slotObj.Birth_Date ?? '—'],
+        ['Color', slotObj.Color ?? '—'],
+        ['Notes', slotObj.Description_Ar ?? slotObj.Notes ?? '—']
+      ];
 
-    // build table HTML
-    let html = `<div class="view-table-wrap"><table class="view-table">`;
-    rows.forEach(([k,v]) => {
-      html += `<tr><th>${k}</th><td>${v}</td></tr>`;
-    });
-    html += `</table></div>`;
-    wrap.innerHTML = html;
+      let html = `<div class="view-table-wrap"><table class="view-table">`;
+      rows.forEach(([k,v]) => {
+        html += `<tr><th>${k}</th><td>${v}</td></tr>`;
+      });
+      html += `</table></div>`;
+      wrap.innerHTML = html;
+    } else {
+      // editable form layout — status select + notes textarea
+      const currentStatus = slotObj.Status ?? 1;
+      const currentNotes = slotObj.Description_Ar ?? slotObj.Notes ?? '';
+
+      const html = `
+        <div style="padding:6px 8px;">
+          <table class="view-table" style="margin-bottom:10px;">
+            <tr><th>Appointment No</th><td>${slotObj.Appoitment_Id ?? '—'}</td></tr>
+            <tr><th>Resource</th><td>${slotObj.Resource_Id ?? slotObj.ResourceId ?? '—'} — ${slotObj.ResourceName ?? ''}</td></tr>
+            <tr><th>Appointment Date</th><td>${slotObj.Date ?? (slotObj.TimeFrom ? slotObj.TimeFrom.split('T')[0] : '—')}</td></tr>
+            <tr><th>Time</th><td>${slotObj.TimeFrom ? fmtTime(slotObj.TimeFrom) : '—'} — ${slotObj.TimeTo ? fmtTime(slotObj.TimeTo) : '—'}</td></tr>
+            <tr><th>Status</th>
+              <td>
+                <select id="viewStatusSelect" style="padding:8px;border-radius:6px;border:1px solid var(--border);min-width:160px">
+                  <option value="1"${currentStatus==1? ' selected':''}>Pending</option>
+                  <option value="2"${currentStatus==2? ' selected':''}>Accept</option>
+                  <option value="3"${currentStatus==3? ' selected':''}>Reject</option>
+                </select>
+              </td>
+            </tr>
+            <tr><th>Notes</th>
+              <td>
+                <textarea id="viewNotesInput" rows="4" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--border)">${escapeHtml(currentNotes)}</textarea>
+              </td>
+            </tr>
+          </table>
+        </div>
+      `;
+      wrap.innerHTML = `<div class="view-table-wrap">${html}</div>`;
+    }
   }
 
-  // show modal
+  // Show modal
   viewModal.setAttribute('aria-hidden','false');
   viewModal.style.visibility = 'visible';
   viewModal.style.opacity = '1';
+
+  // Rebuild actions area depending on editable flag
+  actionsWrap.innerHTML = '';
+  if (editable) {
+    const updateBtn = document.createElement('button');
+    updateBtn.className = 'btn primary';
+    updateBtn.textContent = 'Update (send)';
+    updateBtn.addEventListener('click', async () => {
+      // gather values and call API
+      try {
+        const appId = slotObj.Appoitment_Id;
+        if (!appId) {
+          alert('Appointment_Id is missing — cannot update.');
+          return;
+        }
+        const statusVal = document.getElementById('viewStatusSelect').value;
+        const notesVal = document.getElementById('viewNotesInput').value;
+
+        setStatus('Sending update to server...');
+        const resp = await updateAppointmentAPI(appId, statusVal, notesVal);
+        if (resp && String(resp.result).toLowerCase() === 'success') {
+          // update local slot object to reflect server change
+          // prefer to update fields that we show — Status, Description_En (simple map), Notes
+          slotObj.Status = Number(statusVal);
+          slotObj.Notes = notesVal;
+          // map simple human label
+          slotObj.Description_En = (statusVal === '2') ? 'Accepted' : (statusVal === '3') ? 'Rejected' : 'Pending';
+          // keep notes visible in view table
+          slotObj.Description_Ar = notesVal;
+
+          // persist change into slotsMap if present
+          const resArr = slotsMap[String(slotObj.Resource_Id)] || slotsMap[String(slotObj.ResourceId)] || [];
+          const found = resArr.find(s => String(s.Appoitment_Id) === String(slotObj.Appoitment_Id));
+          if (found) {
+            found.Status = slotObj.Status;
+            found.Description_En = slotObj.Description_En;
+            found.Description_Ar = slotObj.Description_Ar;
+            found.Notes = slotObj.Notes;
+          }
+
+          setStatus('Update saved — server responded success.');
+          closeViewModal();
+          renderGrid($('#datePicker').value || isoDateString(new Date()));
+          alert('Update successful.');
+          if (typeof options.onUpdated === 'function') options.onUpdated(slotObj);
+        } else {
+          const msg = (resp && resp.msg_en) ? resp.msg_en : 'Unknown response from server';
+          setStatus('Update failed', true);
+          alert('Update failed: ' + msg);
+        }
+      } catch (err) {
+        console.error(err);
+        setStatus('Update API error', true);
+        alert('Failed to send update. See console for details (CORS/SSL issues possible).');
+      }
+    });
+    actionsWrap.appendChild(updateBtn);
+  }
+
+  // Always show close button
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'btn';
+  closeBtn.textContent = 'Close';
+  closeBtn.addEventListener('click', closeViewModal);
+  actionsWrap.appendChild(closeBtn);
 }
 
 /* Close view modal */
 function closeViewModal() {
   const viewModal = $('#viewModal');
   $('#viewTableWrap').innerHTML = '';
+  $('#viewModalActions').innerHTML = '';
   viewModal.setAttribute('aria-hidden','true');
   viewModal.style.visibility = 'hidden';
   viewModal.style.opacity = '0';
+}
+
+/* small escape utility for textarea content */
+function escapeHtml(s) {
+  if (!s && s !== 0) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 /* ====================
@@ -312,6 +471,7 @@ function renderGrid(dateStr) {
         slotEl.dataset.timeFrom = matched.TimeFrom;
         slotEl.dataset.timeTo = matched.TimeTo;
 
+        // show time + small label
         slotEl.innerHTML = `<div>${fmtTime(matched.TimeFrom)}</div><small>${matched.Description_En || ''}</small>`;
         slotEl.addEventListener('click', () => onSlotClick(matched, r));
         col.appendChild(slotEl);
@@ -355,9 +515,6 @@ const modalEl = $('#modal');
 const modalTitle = $('#modalTitle');
 const modalBody = $('#modalBody');
 const modalActions = $('#modalActions');
-const modalConfirm = $('#modalConfirm');
-const modalCancel = $('#modalCancel');
-const modalClose = $('#modalClose');
 
 let modalContext = null; // store context for confirm handler
 
@@ -367,8 +524,7 @@ function openModal(mode, ctx) {
   modalEl.style.visibility = 'visible';
   modalEl.style.opacity = '1';
 
-  // common cancel button exists
-  // we will rebuild modal-actions to include view buttons conditionally
+  // rebuild modal body/actions
   modalBody.innerHTML = '';
   modalActions.innerHTML = '';
 
@@ -380,21 +536,19 @@ function openModal(mode, ctx) {
       <p>Customer ID: <strong>${ctx.customerId}</strong></p>
       <p>Action: This will <strong>mark this slot as registered</strong> (mock). Placeholder included for real API POST.</p>
     `;
-    // Add View Details button (register modal only)
+    // View Details button (register modal)
     const viewBtn = document.createElement('button');
     viewBtn.className = 'btn';
     viewBtn.textContent = 'View Details';
     viewBtn.addEventListener('click', async () => {
-      // open view modal using slot object directly (fast)
       const slot = await fetchAppointmentDetails({ customerId: ctx.customerId, dateStr: $('#datePicker').value, resourceId: ctx.resource.ID, slotObj: ctx.slot });
-      openViewModal(slot);
+      openViewModal(slot, { editable: false });
     });
     modalActions.appendChild(viewBtn);
 
-    // Confirm button
+    // Register confirm (mock)
     const confirmBtn = document.createElement('button');
     confirmBtn.className = 'btn primary';
-    confirmBtn.id = 'modalConfirm';
     confirmBtn.textContent = 'Register';
     confirmBtn.addEventListener('click', () => handleModalConfirm('register', ctx));
     modalActions.appendChild(confirmBtn);
@@ -402,7 +556,6 @@ function openModal(mode, ctx) {
     // Cancel
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'btn';
-    cancelBtn.id = 'modalCancel';
     cancelBtn.textContent = 'Cancel';
     cancelBtn.addEventListener('click', closeModal);
     modalActions.appendChild(cancelBtn);
@@ -415,7 +568,7 @@ function openModal(mode, ctx) {
       <p>New slot: <strong>${fmtTime(ctx.slot.TimeFrom)} — ${fmtTime(ctx.slot.TimeTo)}</strong></p>
       <p>Resource: <strong>${ctx.resource.Name_En}</strong> (ID: ${ctx.resource.ID})</p>
       <p>Customer ID: <strong>${ctx.customerId}</strong></p>
-      <p>Action: This will <strong>move your registration</strong> to the new slot (mock). Placeholder included for real API PUT.</p>
+      <p>Action: This will <strong>move your registration</strong> to the new slot (mock). Final update is completed via View → Updating.</p>
     `;
 
     // View Current button
@@ -423,40 +576,81 @@ function openModal(mode, ctx) {
     viewCurrent.className = 'btn';
     viewCurrent.textContent = 'View Current';
     viewCurrent.addEventListener('click', async () => {
-      // use registeredSlot or ctx.old to fetch details
       const current = ctx.old && ctx.old.Appoitment_Id ? ctx.old : registeredSlot;
-      if (!current) {
-        alert('No current registration available.');
-        return;
-      }
-      // try find details by Appoitment_Id
+      if (!current) { alert('No current registration available.'); return; }
       const slot = await fetchAppointmentDetails({ customerId: ctx.customerId, dateStr: $('#datePicker').value, resourceId: current.Resource_Id || ctx.resource.ID, appId: current.Appoitment_Id });
-      openViewModal(slot);
+      openViewModal(slot, { editable: false });
     });
     modalActions.appendChild(viewCurrent);
 
-    // View Updating button (show new slot details)
+    // View Updating button
     const viewUpdating = document.createElement('button');
     viewUpdating.className = 'btn';
     viewUpdating.textContent = 'View Updating';
     viewUpdating.addEventListener('click', async () => {
       const slot = await fetchAppointmentDetails({ customerId: ctx.customerId, dateStr: $('#datePicker').value, resourceId: ctx.resource.ID, slotObj: ctx.slot });
-      openViewModal(slot);
+      // open view modal in editable mode (final update will be done here)
+      openViewModal(slot, {
+        editable: true,
+        onUpdated: (updatedSlot) => {
+          // optional callback after update: mark new slot registered & clear previous registration
+          // Unregister previous (session) if present
+          const old = ctx.old;
+          if (old && old.Appoitment_Id) {
+            const prevResSlots = slotsMap[String(old.Resource_Id)] || [];
+            const prevObj = prevResSlots.find(s => s.Appoitment_Id === old.Appoitment_Id);
+            if (prevObj) delete prevObj.Register_Id;
+          }
+          // Mark new slot Register_Id = customer and as registeredSlot in session
+          if (updatedSlot) {
+            updatedSlot.Register_Id = ctx.customerId;
+            registeredSlot = {
+              Appoitment_Id: updatedSlot.Appoitment_Id,
+              Resource_Id: ctx.resource.ID,
+              TimeFrom: updatedSlot.TimeFrom,
+              TimeTo: updatedSlot.TimeTo
+            };
+            renderGrid($('#datePicker').value || isoDateString(new Date()));
+          }
+        }
+      });
     });
     modalActions.appendChild(viewUpdating);
 
-    // Confirm update button
+    // Confirm update (redirect to view updating)
     const confirmBtn = document.createElement('button');
     confirmBtn.className = 'btn primary';
-    confirmBtn.id = 'modalConfirm';
-    confirmBtn.textContent = 'Confirm update';
-    confirmBtn.addEventListener('click', () => handleModalConfirm('update', ctx));
+    confirmBtn.textContent = 'Go to View (finalize)';
+    confirmBtn.addEventListener('click', async () => {
+      // redirect to view-updating (same as View Updating button)
+      const slot = await fetchAppointmentDetails({ customerId: ctx.customerId, dateStr: $('#datePicker').value, resourceId: ctx.resource.ID, slotObj: ctx.slot });
+      openViewModal(slot, {
+        editable: true,
+        onUpdated: (updatedSlot) => {
+          const old = ctx.old;
+          if (old && old.Appoitment_Id) {
+            const prevResSlots = slotsMap[String(old.Resource_Id)] || [];
+            const prevObj = prevResSlots.find(s => s.Appoitment_Id === old.Appoitment_Id);
+            if (prevObj) delete prevObj.Register_Id;
+          }
+          if (updatedSlot) {
+            updatedSlot.Register_Id = ctx.customerId;
+            registeredSlot = {
+              Appoitment_Id: updatedSlot.Appoitment_Id,
+              Resource_Id: ctx.resource.ID,
+              TimeFrom: updatedSlot.TimeFrom,
+              TimeTo: updatedSlot.TimeTo
+            };
+            renderGrid($('#datePicker').value || isoDateString(new Date()));
+          }
+        }
+      });
+    });
     modalActions.appendChild(confirmBtn);
 
     // Cancel
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'btn';
-    cancelBtn.id = 'modalCancel';
     cancelBtn.textContent = 'Cancel';
     cancelBtn.addEventListener('click', closeModal);
     modalActions.appendChild(cancelBtn);
@@ -470,7 +664,7 @@ function closeModal() {
   modalEl.style.opacity = '0';
 }
 
-/* Centralized confirm handler used by register/update buttons */
+/* Centralized confirm handler used by register (mock) */
 async function handleModalConfirm(mode, ctx) {
   try {
     if (mode === 'register') {
@@ -488,27 +682,6 @@ async function handleModalConfirm(mode, ctx) {
       closeModal();
       renderGrid($('#datePicker').value || isoDateString(new Date()));
       alert('Appointment registered (mock).');
-    } else if (mode === 'update') {
-      const old = ctx.old;
-      const newSlot = ctx.slot;
-      if (old && old.Appoitment_Id) {
-        const prevResSlots = slotsMap[String(old.Resource_Id)] || [];
-        const prevObj = prevResSlots.find(s => s.Appoitment_Id === old.Appoitment_Id);
-        if (prevObj) {
-          delete prevObj.Register_Id;
-        }
-      }
-      newSlot.Register_Id = ctx.customerId;
-      registeredSlot = {
-        Appoitment_Id: newSlot.Appoitment_Id,
-        Resource_Id: ctx.resource.ID,
-        TimeFrom: newSlot.TimeFrom,
-        TimeTo: newSlot.TimeTo
-      };
-      setStatus('Updated (mock): registration moved to new slot');
-      closeModal();
-      renderGrid($('#datePicker').value || isoDateString(new Date()));
-      alert('Appointment updated (mock).');
     }
   } catch (err) {
     console.error(err);
@@ -527,14 +700,13 @@ document.addEventListener('click', (e) => {
    ==================== */
 document.addEventListener('click', (e) => {
   if (e.target && e.target.id === 'viewModalClose') closeViewModal();
-  if (e.target && e.target.id === 'viewCloseBtn') closeViewModal();
 });
 
 /* ====================
    Main load flow
    ==================== */
 document.addEventListener('DOMContentLoaded', () => {
-  $('#modeSelect').value = MODE;
+  //$('#modeSelect').value = MODE;
   $('#customerInput').value = CONFIG.CUSTOMER_ID;
   const today = isoDateString(new Date());
   $('#datePicker').value = today;
@@ -576,7 +748,8 @@ async function loadAndRender(dateStr, customerId) {
     slotsMap = {};
     const promises = resources.map(async (r) => {
       const arr = await fetchSlotsForResource(customerId, dateStr, r.ID);
-      slotsMap[String(r.ID)] = (arr || []).map(s => ({ ...s }));
+      // attach resource name to each slot for better display
+      slotsMap[String(r.ID)] = (arr || []).map(s => ({ ...s, ResourceName: r.Name_En || r.Name }));
       if (CONFIG.RESPECT_SERVER_REGISTERED) {
         (slotsMap[String(r.ID)] || []).forEach(s => {
           if (s.Register_Id && Number(s.Register_Id) === Number(customerId)) {
@@ -598,7 +771,12 @@ async function loadAndRender(dateStr, customerId) {
 
 /* ====================
    Notes for Integration:
-   - Add appointment (POST): implement in handleModalConfirm register block.
-   - Update appointment (PUT): implement in handleModalConfirm update block.
-   - fetchAppointmentDetails uses the same GetAppointment endpoint to populate view table.
+   - Add appointment (POST): implement in handleModalConfirm register block (replace mock).
+   - Update appointment (server): updateAppointmentAPI() uses POST to CONFIG.UPDATE_ENDPOINT.
+     The request body currently is:
+       { Appointment_Id: "...", Notes: "...", Status: "1" }
+     Adjust field names/headers if server expects different format.
+   - The "final update" step is executed from the View modal (editable mode).
+   - On success we update the in-memory slot and re-render grid so the user sees changes.
+   - Be aware of CORS/HTTPS when deploying; Netlify + HTTP backend without CORS/HTTPS will block requests.
    ==================== */

@@ -15,9 +15,9 @@
 
     <div class="right">
       <label class="small">Mode
-        <select id="modeSelect">
-          <option value="live">Live API</option>
-          <option value="mock">Mock</option>
+        <select id="modeSelect" >
+          <option value="live" selected>Live API</option>
+          <!-- <option value="mock" >Mock</option> -->
         </select>
       </label>
 
@@ -63,18 +63,19 @@
     </div>
   </div>
 
-  <!-- View Details Modal (separate, read-only) -->
+  <!-- View Details Modal (separate; read-only by default, editable in "updating" mode) -->
   <div id="viewModal" class="modal" aria-hidden="true">
     <div class="modal-content">
       <button id="viewModalClose" class="modal-close">&times;</button>
       <h3 id="viewModalTitle">Appointment Details</h3>
 
       <div id="viewModalBody" class="modal-body">
-        <!-- table will be injected here -->
+        <!-- table / form will be injected here -->
         <div class="view-table-wrap" id="viewTableWrap"></div>
       </div>
 
-      <div class="modal-actions">
+      <div class="modal-actions" id="viewModalActions">
+        <!-- when in read mode only Close is shown; when in edit mode Update button appears -->
         <button id="viewCloseBtn" class="btn primary">Close</button>
       </div>
     </div>

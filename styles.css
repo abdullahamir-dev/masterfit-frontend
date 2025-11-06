@@ -58,7 +58,7 @@ body{margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Arial;background:var(-
 .modal-close{position:absolute;right:12px;top:8px;border:0;background:transparent;font-size:22px;cursor:pointer}
 .modal-body{margin:12px 0;font-size:14px;color:#222}
 .modal-actions{display:flex;gap:10px;justify-content:flex-end}
-.footer{max-width:1200px;margin:14px auto;padding:0 12px;color:var(--muted);text-align:center;font-size:13px}
+.footer{max-width:1200px;margin:14px auto;padding:0 12px;color:var(--muted);text-align:center;font-size:13}
 
 /* view modal table (modern, compact) */
 .view-table-wrap {
