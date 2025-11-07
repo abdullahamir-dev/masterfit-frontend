@@ -25,6 +25,37 @@ body{margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Arial;background:var(-
 .container{max-width:1200px;margin:18px auto;padding:0 12px}
 .status{padding:8px 12px;border-radius:8px;background:#fff;color:#222;margin-bottom:12px;border:1px solid var(--border)}
 
+/* NEW: grid controls - date display + nav */
+.grid-controls {
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:12px;
+  margin-bottom:10px;
+  padding:8px;
+  background: transparent;
+}
+.display-date {
+  font-size:15px;
+  font-weight:700;
+  color: #1f2937;
+}
+.grid-nav {
+  display:flex;
+  gap:8px;
+}
+.nav-btn {
+  background: #3b52c4;
+  color: #fff;
+  border: 0;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-weight:700;
+  cursor: pointer;
+  min-width:36px;
+}
+.nav-btn:hover { filter:brightness(.95); }
+
 /* grid layout */
 .grid-wrap{overflow:auto;background:var(--card);border-radius:10px;padding:12px;box-shadow:var(--shadow)}
 .grid-header{display:flex;border-bottom:1px solid var(--border);padding:8px 0;background:#fff;position:sticky;top:0;z-index:2}

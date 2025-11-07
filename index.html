@@ -14,17 +14,7 @@
     </div>
 
     <div class="right">
-      <label class="small">Mode
-        <select id="modeSelect" >
-          <option value="live" selected>Live API</option>
-          <!-- <option value="mock" >Mock</option> -->
-        </select>
-      </label>
-
-      <label class="small">Customer ID
-        <input id="customerInput" type="number" min="1" />
-      </label>
-
+      <!-- client requested removal of Mode & Client ID -->
       <label class="small">Date
         <input id="datePicker" type="date" />
       </label>
@@ -35,6 +25,15 @@
 
   <main class="container">
     <div id="status" class="status">Ready</div>
+
+    <!-- NEW: Grid controls - left dynamic date + right nav buttons -->
+    <div class="grid-controls">
+      <div id="displayDate" class="display-date" aria-live="polite">—</div>
+      <div class="grid-nav">
+        <button id="prevDateBtn" class="nav-btn" title="Previous date">&lt;</button>
+        <button id="nextDateBtn" class="nav-btn" title="Next date">&gt;</button>
+      </div>
+    </div>
 
     <!-- Grid container -->
     <div id="gridWrap" class="grid-wrap" hidden>

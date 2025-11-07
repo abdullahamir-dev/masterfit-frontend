@@ -5,6 +5,8 @@
      GET /MasterFit_APP_GetAppointment/Calender?Customer_Id={id}&Date={yyyy-mm-dd}&Resource_Id={id}
    - New: Update endpoint POST /Masterfit_Calender_Nutation_Update
    - View modal supports read-only view and "updating" edit mode where Status/Notes can be changed
+
+   NOTE: This file is your original file with added date-nav/display integration.
 */
 
 /* =========================
@@ -55,6 +57,17 @@ function isoDateString(d) {
   const mm = String(d.getMonth()+1).padStart(2,'0');
   const dd = String(d.getDate()).padStart(2,'0');
   return `${yyyy}-${mm}-${dd}`;
+}
+
+/* nice display format for left-side dynamic date:
+   "Friday, November 07 2025" */
+function formatDisplayDateStr(dateStr) {
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+  const opts = { weekday: 'long', month: 'long', day: '2-digit', year: 'numeric' };
+  // "Friday, November 07, 2025" - remove comma before year to match "Friday, November 07 2025"
+  const s = d.toLocaleDateString('en-US', opts);
+  return s.replace(/, (\d{4})$/, ' $1');
 }
 
 /* generate row times (array of Date objects for the given date) */
@@ -174,13 +187,6 @@ async function updateAppointmentAPI(appointmentId, statusValue, notesValue) {
     Notes: notesValue ?? '',
     Status: String(statusValue ?? '')
   };
-
-  // If in mock mode, simulate success response
-  //if (MODE === 'mock') {
-    // small delay to simulate network
-    //await new Promise(r => setTimeout(r, 350));
-    //return { result: 'success', msg_en: 'Success', msg_ar: 'sucess' };
-  //}
 
   // real network call
   const resp = await apiPostJson(CONFIG.UPDATE_ENDPOINT, body);
@@ -341,6 +347,7 @@ function openViewModal(slotObj, options = {}) {
           closeViewModal();
           renderGrid($('#datePicker').value || isoDateString(new Date()));
           alert('Update successful.');
+          gridLoaderCaller();
           if (typeof options.onUpdated === 'function') options.onUpdated(slotObj);
         } else {
           const msg = (resp && resp.msg_en) ? resp.msg_en : 'Unknown response from server';
@@ -452,7 +459,7 @@ function renderGrid(dateStr) {
 
       if (matched) {
         const slotEl = document.createElement('div');
-        const custId = Number($('#customerInput').value || CONFIG.CUSTOMER_ID);
+        const custId = Number(CONFIG.CUSTOMER_ID);
         const serverRegistered = matched.Register_Id && Number(matched.Register_Id) === custId;
         const isRegistered = (registeredSlot && registeredSlot.Appoitment_Id && registeredSlot.Appoitment_Id === matched.Appoitment_Id)
                               || (CONFIG.RESPECT_SERVER_REGISTERED && serverRegistered);
@@ -490,7 +497,7 @@ function renderGrid(dateStr) {
    Slot click logic
    ==================== */
 function onSlotClick(slotObj, resource) {
-  const custId = Number($('#customerInput').value || CONFIG.CUSTOMER_ID);
+  const custId = Number(CONFIG.CUSTOMER_ID);
   const serverRegistered = slotObj.Register_Id && Number(slotObj.Register_Id) === custId;
   const isRegistered = (registeredSlot && registeredSlot.Appoitment_Id === slotObj.Appoitment_Id)
                        || (CONFIG.RESPECT_SERVER_REGISTERED && serverRegistered);
@@ -707,21 +714,54 @@ document.addEventListener('click', (e) => {
    ==================== */
 document.addEventListener('DOMContentLoaded', () => {
   //$('#modeSelect').value = MODE;
-  $('#customerInput').value = CONFIG.CUSTOMER_ID;
+  //$('#customerInput').value = CONFIG.CUSTOMER_ID;
+
   const today = isoDateString(new Date());
   $('#datePicker').value = today;
 
+  // initialize display date
+  const displayEl = $('#displayDate');
+  displayEl.textContent = formatDisplayDateStr($('#datePicker').value);
+
   $('#loadBtn').addEventListener('click', async () => {
     const dateStr = $('#datePicker').value || isoDateString(new Date());
-    const custId = Number($('#customerInput').value || CONFIG.CUSTOMER_ID);
+    const custId = Number(CONFIG.CUSTOMER_ID);
     await loadAndRender(dateStr, custId);
   });
 
-  $('#modeSelect').addEventListener('change', (e) => {
-    MODE = e.target.value;
-    localStorage.setItem('mode', MODE);
-    setStatus(`Mode: ${MODE}`, MODE === 'mock');
+  // date picker change: update display and reload grid
+  $('#datePicker').addEventListener('change', () => {
+    const dateStr = $('#datePicker').value || isoDateString(new Date());
+    $('#displayDate').textContent = formatDisplayDateStr(dateStr);
+    // We do NOT ask user for confirmation here — update grid directly
+    gridLoaderCaller();
   });
+
+  // prev / next buttons (connected to datePicker)
+  const prevBtn = $('#prevDateBtn');
+  const nextBtn = $('#nextDateBtn');
+
+  if (prevBtn) {
+    prevBtn.addEventListener('click', () => {
+      const cur = new Date($('#datePicker').value || isoDateString(new Date()));
+      cur.setDate(cur.getDate() - 1);
+      const newIso = isoDateString(cur);
+      $('#datePicker').value = newIso;
+      $('#displayDate').textContent = formatDisplayDateStr(newIso);
+      gridLoaderCaller();
+    });
+  }
+
+  if (nextBtn) {
+    nextBtn.addEventListener('click', () => {
+      const cur = new Date($('#datePicker').value || isoDateString(new Date()));
+      cur.setDate(cur.getDate() + 1);
+      const newIso = isoDateString(cur);
+      $('#datePicker').value = newIso;
+      $('#displayDate').textContent = formatDisplayDateStr(newIso);
+      gridLoaderCaller();
+    });
+  }
 
   // initial load
   (async () => { await $('#loadBtn').click(); })();
@@ -761,12 +801,23 @@ async function loadAndRender(dateStr, customerId) {
 
     await Promise.all(promises);
     renderGrid(dateStr);
+
+    // ensure display date synced after load (in case external caller changed date)
+    const dp = $('#datePicker').value || isoDateString(new Date());
+    $('#displayDate').textContent = formatDisplayDateStr(dp);
   } catch (err) {
     console.error(err);
     setStatus('Failed to load grid', true);
     $('#gridWrap').hidden = true;
     $('#noData').hidden = false;
   }
+}
+
+
+let gridLoaderCaller = async ()=>{
+    const dateStr = $('#datePicker').value || isoDateString(new Date());
+    const custId = Number(CONFIG.CUSTOMER_ID);
+    await loadAndRender(dateStr, custId);
 }
 
 /* ====================
